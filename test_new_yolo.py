@@ -65,15 +65,15 @@ def _main(args):
 
     model_body, model = create_model(anchors, class_names)
 
-    train(
-        model,
-        class_names,
-        anchors,
-        image_data,
-        boxes,
-        detectors_mask,
-        matching_true_boxes
-    )
+    # train(
+    #     model,
+    #     class_names,
+    #     anchors,
+    #     image_data,
+    #     boxes,
+    #     detectors_mask,
+    #     matching_true_boxes
+    # )
 
     draw(model_body,
         class_names,
@@ -334,8 +334,8 @@ def draw(model_body, class_names, anchors, image_data, image_set='val',
             image.save(os.path.join(out_path,str(i)+'.png'))
 
         # To display (pauses the program):
-        plt.imshow(image_with_boxes, interpolation='nearest')
-        plt.show()
+        # plt.imshow(image_with_boxes, interpolation='nearest')
+        # plt.show()
 
 
 
