@@ -18,6 +18,7 @@ from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
 from yad2k.models.keras_yolo import (preprocess_true_boxes, yolo_body,
                                      yolo_eval, yolo_head, yolo_loss)
 from yad2k.utils.draw_boxes import draw_boxes
+import tables
 
 # Args
 argparser = argparse.ArgumentParser(
@@ -48,7 +49,9 @@ YOLO_ANCHORS = np.array(
 
 def _main(args):
     # data_path = os.path.expanduser(args.data_path)
-    data_path = "spine_preprocessing//spine_images_and_boxes.pkl"
+    # data_path = "spine_preprocessing//spine_images_and_boxes.pkl"
+    images_path = "spine_preprocessing//spine_images_all.hdf5"
+    boxes_path = "spine_preprocessing//spine_boxes.npz"
     classes_path = os.path.expanduser(args.classes_path)
     anchors_path = os.path.expanduser(args.anchors_path)
 
@@ -58,16 +61,24 @@ def _main(args):
     # data = np.load(data_path) # custom data saved as a numpy file.
     #  has 2 arrays: an object array 'boxes' (variable length of boxes in each image)
     #  and an array of images 'images'
-    data = pd.read_pickle(data_path)
+    boxes = np.load(boxes_path)
+    boxes = boxes['boxes']
+
+    hdf5_file = tables.open_file(images_path, mode='r')
+    image_data = hdf5_file.root.images[:]
+    hdf5_file.close()
+
 
     # image_data, boxes = process_data(data['images'], data['boxes'])
-    image_data, boxes = process_data(data['images_padded'].as_matrix(), data['boxes'].as_matrix())
+    image_data, boxes = process_data(image_data, boxes)
 
     anchors = YOLO_ANCHORS
 
     detectors_mask, matching_true_boxes = get_detector_mask(boxes, anchors)
 
     model_body, model = create_model(anchors, class_names)
+    # model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
+    # model.load_weights('trained_stage_3_best.h5')
 
     train(
         model,
@@ -108,7 +119,16 @@ def get_anchors(anchors_path):
 
 def process_data(images, boxes=None):
     '''processes the data'''
-    images = [PIL.Image.fromarray(i) for i in images]
+
+    # shuffle the data
+    data_len = images.shape[0]
+    shuffle_index = np.array(range(data_len))
+    np.random.shuffle(shuffle_index)
+    images = images[shuffle_index,:,:,:]
+    if boxes is not None:
+        boxes = boxes[shuffle_index]
+
+    images = [PIL.Image.fromarray(images[i,:,:,:]) for i in range(images.shape[0])]
     orig_size = np.array([images[0].width, images[0].height])
     orig_size = np.expand_dims(orig_size, axis=0)
 
