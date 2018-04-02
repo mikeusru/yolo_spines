@@ -32,6 +32,12 @@ argparser.add_argument(
     default=os.path.join('..', 'DATA', 'underwater_data.npz'))
 
 argparser.add_argument(
+    '-t',
+    '--train',
+    help="set training to (default) 'on' or 'off'",
+    default='on')
+
+argparser.add_argument(
     '-a',
     '--anchors_path',
     help='path to anchors file, defaults to yolo_anchors.txt',
@@ -56,6 +62,7 @@ def _main(args):
     boxes_path = "spine_preprocessing//spine_boxes.hdf5"
     classes_path = os.path.expanduser(args.classes_path)
     anchors_path = os.path.expanduser(args.anchors_path)
+    training_on = args.train == 'on'
 
     class_names = get_classes(classes_path)
     anchors = get_anchors(anchors_path)
@@ -68,23 +75,25 @@ def _main(args):
     anchors = YOLO_ANCHORS
 
     model_body, model = create_model(anchors, class_names)
+    if training_on:
+        train(
+            model,
+            class_names,
+            anchors,
+            partition,
+            images_path,
+            boxes_path
+        )
 
-    train(
-        model,
-        class_names,
-        anchors,
-        partition,
-        images_path,
-        boxes_path
-    )
-    #
-    # draw(model_body,
-    #      class_names,
-    #      anchors,
-    #      image_data,
-    #      image_set='val',  # assumes training/validation split is 0.9
-    #      weights_name='trained_stage_3_best.h5',
-    #      save_all=False)
+
+    draw(model_body,
+         class_names,
+         anchors,
+         partition,
+         images_path,
+         image_set='validation',  # assumes training/validation split is 0.9
+         weights_name='trained_stage_3_best.h5',
+         save_all=False)
 
 
 def get_classes(classes_path):
@@ -221,7 +230,7 @@ def train(model, class_names, anchors, partition, images_path, boxes_path):
     model.fit_generator(generator=training_generator,
                         validation_data=validation_generator,
                         use_multiprocessing=True,
-                        workers = 4,
+                        workers = 6,
                         epochs=5,
                         callbacks=[logging])
 
@@ -269,31 +278,27 @@ def train(model, class_names, anchors, partition, images_path, boxes_path):
     model.save_weights('trained_stage_3.h5')
 
 
-def draw(model_body, class_names, anchors, image_data, image_set='val',
-         weights_name='trained_stage_3_best.h5', out_path="output_images", save_all=True):
+def draw(model_body, class_names, anchors, partition, images_path,
+         image_set='validation', weights_name='trained_stage_3_best.h5',
+         out_path="output_images", save_all=True):
     '''
     Draw bounding boxes on image data
     '''
-    if image_set == 'train':
-        image_data = np.array([np.expand_dims(image, axis=0)
-                               for image in image_data[:int(len(image_data) * .9)]])
-    elif image_set == 'val':
-        image_data = np.array([np.expand_dims(image, axis=0)
-                               for image in image_data[int(len(image_data) * .9):]])
-    elif image_set == 'all':
-        image_data = np.array([np.expand_dims(image, axis=0)
-                               for image in image_data])
-    else:
-        ValueError("draw argument image_set must be 'train', 'val', or 'all'")
-    # model.load_weights(weights_name)
-    print(image_data.shape)
+
+    # load validation data
+    hdf5_file_images = h5py.File(images_path, "r")
+    image_data = hdf5_file_images["images"][partition[image_set],...]
+    hdf5_file_images.close()
+
+    image_data = np.expand_dims(image_data, axis=1)
+
     model_body.load_weights(weights_name)
 
     # Create output variables for prediction.
     yolo_outputs = yolo_head(model_body.output, anchors, len(class_names))
     input_image_shape = K.placeholder(shape=(2,))
     boxes, scores, classes = yolo_eval(
-        yolo_outputs, input_image_shape, score_threshold=0.07, iou_threshold=0.0)
+        yolo_outputs, input_image_shape, score_threshold=0.5, iou_threshold=0.5)
 
     # Run prediction on overfit image.
     sess = K.get_session()  # TODO: Remove dependence on Tensorflow session.
@@ -312,7 +317,7 @@ def draw(model_body, class_names, anchors, image_data, image_set='val',
         print(out_boxes)
 
         # Plot image with predicted boxes.
-        image_with_boxes = draw_boxes(image_data[i][0], out_boxes, out_classes,
+        image_with_boxes = draw_boxes(image_data[i][0].astype(np.uint8)*255, out_boxes, out_classes,
                                       class_names, out_scores)
         # Save the image:
         if save_all or (len(out_boxes) > 0):
