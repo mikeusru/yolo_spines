@@ -2,10 +2,13 @@ import h5py
 import numpy as np
 import keras
 from yad2k.models.keras_yolo import preprocess_true_boxes
+import scipy.ndimage as ndi
+from skimage import transform
 
 
-def random_rotation_with_boxes(x, boxes, rg, row_axis=1, col_axis=2, channel_axis=0,
-                               fill_mode='nearest', cval=0.):
+
+def random_rotation_with_boxes(x, boxes, rg, row_axis=0, col_axis=1, channel_axis=2,
+                               fill_mode='constant', cval=0.):
     """Performs a random rotation of a Numpy image tensor. Also rotates the corresponding bounding boxes
 
    # Arguments
@@ -38,25 +41,26 @@ def random_rotation_with_boxes(x, boxes, rg, row_axis=1, col_axis=2, channel_axi
     transform_matrix = transform_matrix_offset_center(rotation_matrix, h, w)
     x = apply_transform(x, transform_matrix, channel_axis, fill_mode, cval)
 
-    # apply to vertices
-    # vertices = boxes_to_vertices(boxes)
-    # vertices = vertices.reshape((-1, 2))
+    # only rotate boxes where class != 0
+    true_boxes_ind = boxes[:, 4] != 0
+    points = boxes[true_boxes_ind, :2]
+    points_rotated = rotate_coordinates([.5, .5], points, theta)
+    boxes[true_boxes_ind, :2] = points_rotated
 
-    # apply offset to have pivot point at [0.5, 0.5]
-    # vertices -= [0.5, 0.5]
+    # remove any boxes which are now out of bounds
+    boxes_out_of_bounds_ind = (0 > np.min(boxes[:, :2], axis=1)) | (1 < np.max(boxes[:, :2], axis=1))
+    boxes[boxes_out_of_bounds_ind, ...] = 0
 
-    # apply rotation, we only need the rotation part of the matrix
-    # vertices = np.dot(vertices, rotation_matrix[:2, :2])
-    # vertices += [0.5, 0.5]
+    return x, boxes
 
-    # boxes = vertices_to_boxes(vertices)
-
-    return x, boxes#, vertices
 
 def rotate_coordinates(origin,points,angle):
     # points is an x,y matrix of shape (n,2)
     ox,oy = origin
-    ox,oy = points[:,0], points[:,1]
+    px,py = points[:,0], points[:,1]
+    qx = ox + np.cos(angle) * (px - ox) - np.sin(angle) * (py - oy)
+    qy = oy + np.sin(angle) * (px - ox) + np.cos(angle) * (py - oy)
+    return np.array([qx,qy]).T
 
 
 def transform_matrix_offset_center(matrix, x, y):
@@ -157,7 +161,11 @@ class DataGenerator(keras.utils.Sequence):
         boxes = hdf5_file_boxes['boxes'][list_IDs_temp,...]
         hdf5_file_boxes.close()
 
-        # image_data = image_data.astype(np.float) / 255
+        # apply transformations to data and boxes
+        for i, (img, boxes_single_image) in enumerate(zip(image_data, boxes)):
+            img, boxes_single_image = random_rotation_with_boxes(img, boxes_single_image, 180)
+            image_data[i] = img
+            boxes[i] = boxes_single_image
 
         detectors_mask, matching_true_boxes = self.get_detector_mask(boxes, self.anchors)
         return [image_data, boxes, detectors_mask, matching_true_boxes], np.zeros(len(image_data))

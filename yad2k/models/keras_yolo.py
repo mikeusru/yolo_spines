@@ -396,6 +396,8 @@ def preprocess_true_boxes(true_boxes, anchors, image_size):
             [conv_width, conv_height, conv_width, conv_height])
         i = np.floor(box[1]).astype('int')
         j = np.floor(box[0]).astype('int')
+        if j > 12 or i > 12:
+            print("true box = {}, i = {}, j = {}".format(box,i,j))
         best_iou = 0
         best_anchor = 0
         for k, anchor in enumerate(anchors):

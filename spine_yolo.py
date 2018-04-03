@@ -42,7 +42,7 @@ argparser.add_argument(
 argparser.add_argument(
     '-f',
     '--from_scratch',
-    help="start training model using old yolo training data (on/off)",
+    help="don't load starting weights (on/off)",
     default='off')
 
 argparser.add_argument(
@@ -50,6 +50,12 @@ argparser.add_argument(
     '--anchors_path',
     help='path to anchors file, defaults to yolo_anchors.txt',
     default=os.path.join('model_data', 'yolo_anchors.txt'))
+
+argparser.add_argument(
+    '-o',
+    '--overfit_single_image',
+    help='test script on single image',
+    default='off')
 
 argparser.add_argument(
     '-c',
@@ -62,6 +68,7 @@ YOLO_ANCHORS = np.array(
     ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
      (7.88282, 3.52778), (9.77052, 9.16828)))
 
+
 class SpineYolo(object):
 
     def __init__(self, _args):
@@ -72,6 +79,7 @@ class SpineYolo(object):
         self.starting_weights = os.path.expanduser(_args.starting_weights)
         self.from_scratch = _args.from_scratch == 'on'
         self.training_on = _args.train == 'on'
+        self.overfit_single_image = _args.overfit_single_image == 'on'
         self.class_names = self.get_classes()
         self.anchors = self.get_anchors()
         self.partition = self.get_partition()
@@ -80,7 +88,6 @@ class SpineYolo(object):
         self.model_body = None
         self.model = None
         if self.training_on:
-            self.create_model()
             self.train()
             self.draw(image_set='validation',  # assumes training/validation split is 0.9
                       weights_name='trained_stage_3_best.h5',
@@ -151,7 +158,7 @@ class SpineYolo(object):
                 print("CREATING TOPLESS WEIGHTS FILE")
                 yolo_path = os.path.join('model_data', 'yolo.h5')
                 self.model_body = load_model(yolo_path)
-                self.model_body = Model(self.model_body .inputs, self.model_body .layers[-2].output)
+                self.model_body = Model(self.model_body.inputs, self.model_body.layers[-2].output)
                 self.model_body.save_weights(topless_yolo_path)
             topless_yolo.load_weights(topless_yolo_path)
 
@@ -161,7 +168,7 @@ class SpineYolo(object):
         final_layer = Conv2D(len(self.anchors) * (5 + len(self.class_names)), (1, 1), activation='linear')(
             topless_yolo.output)
 
-        model_body = Model(image_input, final_layer)
+        self.model_body = Model(image_input, final_layer)
 
         # Place model loss on CPU to reduce GPU memory usage.
         with tf.device('/cpu:0'):
@@ -172,14 +179,12 @@ class SpineYolo(object):
                 name='yolo_loss',
                 arguments={'anchors': self.anchors,
                            'num_classes': len(self.class_names)})([
-                            model_body.output, boxes_input,
-                            detectors_mask_input, matching_boxes_input])
+                self.model_body.output, boxes_input,
+                detectors_mask_input, matching_boxes_input])
 
         self.model = Model(
-            [model_body.input, boxes_input, detectors_mask_input,
+            [self.model_body.input, boxes_input, detectors_mask_input,
              matching_boxes_input], model_loss)
-
-
 
     def train(self):
         """
@@ -191,46 +196,47 @@ class SpineYolo(object):
 
         best weights according to val_loss is saved as trained_stage_3_best.h5
         """
-
-        self.model.compile(
-            optimizer='adam', loss={
-                'yolo_loss': lambda y_true, y_pred: y_pred
-            })  # This is a hack to use the custom loss function in the last layer.
-
         logging = TensorBoard()
         checkpoint_final_best = ModelCheckpoint("trained_stage_3_best.h5", monitor='val_loss',
-                                     save_weights_only=True, save_best_only=True)
+                                                save_weights_only=True, save_best_only=True)
         checkpoint = ModelCheckpoint("trained_checkpoint.h5", monitor='val_loss',
                                      save_weights_only=True, save_best_only=True)
 
         early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=15, verbose=1, mode='auto')
 
-        params = {'dim': (416, 416),
-                  'batch_size': 32,
-                  'n_classes': 1,
-                  'n_channels': 3,
-                  'shuffle': True}
+        first_round_weights = self.starting_weights
 
-        training_generator, validation_generator = self.make_data_generators(params)
+        # if starting from scratch, train model with frozen body first
+        if self.from_scratch:
+            first_round_weights = 'trained_stage_1.h5'
+            self.create_model()
+            self.model.compile(
+                optimizer='adam', loss={
+                    'yolo_loss': lambda y_true, y_pred: y_pred
+                })  # This is a hack to use the custom loss function in the last layer.
 
-        if not self.from_scratch:
-            self.model.load_weights(self.starting_weights)
+            params = {'dim': (416, 416),
+                      'batch_size': 32,
+                      'n_classes': 1,
+                      'n_channels': 3,
+                      'shuffle': True}
 
-        self.model.fit_generator(generator=training_generator,
-                                 validation_data=validation_generator,
-                                 use_multiprocessing=True,
-                                 workers=6,
-                                 epochs=5,
-                                 callbacks=[logging, checkpoint])
+            training_generator, validation_generator = self.make_data_generators(params)
 
-        self.model.save_weights('trained_stage_1.h5')
+            self.model.fit_generator(generator=training_generator,
+                                     validation_data=validation_generator,
+                                     use_multiprocessing=True,
+                                     workers=6,
+                                     epochs=5,
+                                     callbacks=[logging, checkpoint])
 
-        self.draw(image_set='validation', weights_name='trained_stage_1.h5',
-                  out_path="output_images_stage_1", save_all=False)
+            self.model.save_weights('trained_stage_1.h5')
+            self.draw(image_set='validation', weights_name=first_round_weights,
+                      out_path="output_images_stage_1", save_all=False)
 
         self.create_model(load_pretrained=False, freeze_body=False)
 
-        self.model.load_weights('trained_stage_1.h5')
+        self.model.load_weights(first_round_weights)
 
         self.model.compile(
             optimizer='adam', loss={
@@ -238,7 +244,7 @@ class SpineYolo(object):
             })  # This is a hack to use the custom loss function in the last layer.
 
         params = {'dim': (416, 416),
-                  'batch_size': 16,
+                  'batch_size': 8,
                   'n_classes': 1,
                   'n_channels': 3,
                   'shuffle': True}
@@ -269,12 +275,19 @@ class SpineYolo(object):
         self.model_body.save('model_data//yolo_spine_model_testing.h5')
 
     def make_data_generators(self, params):
-        training_generator = DataGenerator(self.partition['train'],
+        if self.overfit_single_image:
+            params['batch_size'] = 1
+            partition_train = self.partition['train'][[0, 0]]
+            partition_validation = self.partition['train'][[0, 0]]
+        else:
+            partition_train = self.partition['train']
+            partition_validation = self.partition['validation']
+        training_generator = DataGenerator(partition_train,
                                            anchors=self.anchors,
                                            boxes_path=self.boxes_path,
                                            images_path=self.images_path,
                                            **params)
-        validation_generator = DataGenerator(self.partition['validation'],
+        validation_generator = DataGenerator(partition_validation,
                                              anchors=self.anchors,
                                              boxes_path=self.boxes_path,
                                              images_path=self.images_path,
@@ -292,10 +305,13 @@ class SpineYolo(object):
             self.model_body.load_weights(weights_name)
         else:
             self.model_body = load_model(test_model_path)
-
+        if self.overfit_single_image:
+            partition_eval = self.partition["train"][[0, 0]]
+        else:
+            partition_eval = self.partition[image_set]
         # load validation data
         hdf5_file_images = h5py.File(self.images_path, "r")
-        image_data = hdf5_file_images["images"][self.partition[image_set], ...]
+        image_data = np.array([hdf5_file_images["images"][ind, ...] for ind in partition_eval])
         hdf5_file_images.close()
 
         image_data = np.expand_dims(image_data, axis=1)
