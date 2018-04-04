@@ -16,6 +16,7 @@ from yad2k.models.keras_yolo import (yolo_body,
                                      yolo_eval, yolo_head, yolo_loss)
 from yad2k.utils.draw_boxes import draw_boxes
 import h5py
+from spine_preprocessing.spine_preprocessing import process_data
 
 # Args
 argparser = argparse.ArgumentParser(
@@ -24,7 +25,7 @@ argparser = argparse.ArgumentParser(
 argparser.add_argument(
     '-d',
     '--data_path',
-    help="path to numpy data file (.npz) containing np.object array 'boxes' and np.uint8 array 'images'",
+    help="path to numpy data file (.npz) list of all npz file paths in 'file_list' which have 'image' and 'boxes'",
     default=os.path.join('..', 'DATA', 'underwater_data.npz'))
 
 argparser.add_argument(
@@ -72,14 +73,16 @@ YOLO_ANCHORS = np.array(
 class SpineYolo(object):
 
     def __init__(self, _args):
-        self.images_path = "spine_preprocessing//spine_images.hdf5"
-        self.boxes_path = "spine_preprocessing//spine_boxes.hdf5"
+        self.data_path = os.path.expanduser(_args.data_path)
+        # self.images_path = "spine_preprocessing//spine_images.hdf5"
+        # self.boxes_path = "spine_preprocessing//spine_boxes.hdf5"
         self.classes_path = os.path.expanduser(_args.classes_path)
         self.anchors_path = os.path.expanduser(_args.anchors_path)
         self.starting_weights = os.path.expanduser(_args.starting_weights)
         self.from_scratch = _args.from_scratch == 'on'
         self.training_on = _args.train == 'on'
         self.overfit_single_image = _args.overfit_single_image == 'on'
+        self.file_list = np.load(self.data_path)['file_list']
         self.class_names = self.get_classes()
         self.anchors = self.get_anchors()
         self.partition = self.get_partition()
@@ -98,11 +101,9 @@ class SpineYolo(object):
                       save_all=False)
 
     def get_partition(self):
-        hdf5_file = h5py.File(self.images_path, "r")
-        data_len = hdf5_file["images"].shape[0]
+        data_len = self.file_list.size
         partition = dict(train=np.array(range(int(0.9 * data_len))),
                          validation=np.array(range(int(0.9 * data_len), data_len)))
-        hdf5_file.close()
         return partition
 
     def get_classes(self):
@@ -284,13 +285,11 @@ class SpineYolo(object):
             partition_validation = self.partition['validation']
         training_generator = DataGenerator(partition_train,
                                            anchors=self.anchors,
-                                           boxes_path=self.boxes_path,
-                                           images_path=self.images_path,
+                                           file_list = self.file_list,
                                            **params)
         validation_generator = DataGenerator(partition_validation,
                                              anchors=self.anchors,
-                                             boxes_path=self.boxes_path,
-                                             images_path=self.images_path,
+                                             file_list = self.file_list,
                                              **params)
         return training_generator, validation_generator
 
@@ -310,11 +309,16 @@ class SpineYolo(object):
         else:
             partition_eval = self.partition[image_set]
         # load validation data
-        hdf5_file_images = h5py.File(self.images_path, "r")
-        image_data = np.array([hdf5_file_images["images"][ind, ...] for ind in partition_eval])
-        hdf5_file_images.close()
+        # only annotate 100 images max
+        if len(partition_eval) > 100:
+            partition_eval = np.random.choice(partition_eval,(100,))
 
-        image_data = np.expand_dims(image_data, axis=1)
+        files_to_load = self.file_list[partition_eval]
+        print(files_to_load.shape)
+        image_data = [np.load(file)['image'] for file in files_to_load]
+        image_data = process_data(image_data)
+        image_data = np.array([np.expand_dims(image, axis=0)
+                               for image in image_data])
 
         # Create output variables for prediction.
         yolo_outputs = yolo_head(self.model_body.output, self.anchors, len(self.class_names))
@@ -322,8 +326,8 @@ class SpineYolo(object):
         boxes, scores, classes = yolo_eval(
             yolo_outputs, input_image_shape, score_threshold=0.5, iou_threshold=0.5)
 
-        # Run prediction on overfit image.
-        sess = K.get_session()  # TODO: Remove dependence on Tensorflow session.
+        # Run prediction images.
+        sess = K.get_session()
 
         if not os.path.exists(out_path):
             os.makedirs(out_path)
@@ -339,13 +343,12 @@ class SpineYolo(object):
             print(out_boxes)
 
             # Plot image with predicted boxes.
-            image_uint8 = (image_data[i][0] * 255).astype(np.uint8)
-            image_with_boxes = draw_boxes(image_uint8, out_boxes, out_classes,
+            image_with_boxes = draw_boxes(image_data[i][0], out_boxes, out_classes,
                                           self.class_names, out_scores)
             # Save the image:
             if save_all or (len(out_boxes) > 0):
                 image = PIL.Image.fromarray(image_with_boxes)
-                image.save(os.path.join(out_path, str(i) + '.png'))
+                image.save(os.path.join(out_path, str(i) + '.tif'))
 
 
 if __name__ == '__main__':

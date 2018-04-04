@@ -4,7 +4,8 @@ import keras
 from yad2k.models.keras_yolo import preprocess_true_boxes
 import scipy.ndimage as ndi
 from skimage import transform
-
+import PIL
+from spine_preprocessing.spine_preprocessing import process_data
 
 
 def random_rotation_with_boxes(x, boxes, rg, row_axis=0, col_axis=1, channel_axis=2,
@@ -108,14 +109,13 @@ def apply_transform(x,
 
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, list_IDs, anchors, boxes_path, images_path, batch_size=32, dim=(32,32), n_channels=3,
+    def __init__(self, list_IDs, anchors, file_list, batch_size=32, dim=(32,32), n_channels=3,
                  n_classes=1, shuffle=True):
         'Initialization'
         self.anchors = anchors
-        self.images_path = images_path
+        self.file_list = file_list
         self.dim = dim
         self.batch_size = batch_size
-        self.boxes_path = boxes_path
         self.list_IDs = list_IDs
         self.n_channels = n_channels
         self.n_classes = n_classes
@@ -151,24 +151,20 @@ class DataGenerator(keras.utils.Sequence):
         # X = np.empty((self.batch_size, *self.dim, self.n_channels))
         # y = np.empty((self.batch_size), dtype = np.object)
 
-        list_IDs_temp = [x for x in np.sort(np.array(list_IDs_temp))]
-
         # Generate data
-        hdf5_file_images = h5py.File(self.images_path, "r")
-        image_data = hdf5_file_images["images"][list_IDs_temp,...]
-        hdf5_file_images.close()
-        hdf5_file_boxes = h5py.File(self.boxes_path, "r")
-        boxes = hdf5_file_boxes['boxes'][list_IDs_temp,...]
-        hdf5_file_boxes.close()
+        files_to_load = self.file_list[list_IDs_temp]
+        image_data = [np.load(file)['image'] for file in files_to_load]
+        boxes_data = [np.load(file)['boxes'] for file in files_to_load]
+        images,boxes = process_data(image_data,boxes_data)
 
         # apply transformations to data and boxes
-        for i, (img, boxes_single_image) in enumerate(zip(image_data, boxes)):
+        for i, (img, boxes_single_image) in enumerate(zip(images, boxes)):
             img, boxes_single_image = random_rotation_with_boxes(img, boxes_single_image, 180)
-            image_data[i] = img
+            images[i] = img
             boxes[i] = boxes_single_image
 
         detectors_mask, matching_true_boxes = self.get_detector_mask(boxes, self.anchors)
-        return [image_data, boxes, detectors_mask, matching_true_boxes], np.zeros(len(image_data))
+        return [images, boxes, detectors_mask, matching_true_boxes], np.zeros(len(image_data))
 
     def get_detector_mask(self, boxes, anchors):
         '''
