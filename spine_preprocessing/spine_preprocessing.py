@@ -8,7 +8,7 @@ def process_data(images, boxes = None):
 
     # Image preprocessing.
     processed_images = [np.stack([i, i, i], 2) for i in images]
-    processed_images = np.array([transform.resize(i, (416, 416, 3)) for i in processed_images])
+    processed_images = np.array([transform.resize(i, (416, 416, 3), mode='constant') for i in processed_images])
 
     if boxes is not None:
         # Box preprocessing.

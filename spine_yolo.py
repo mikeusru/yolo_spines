@@ -98,7 +98,7 @@ class SpineYolo(object):
         else:
             self.draw(test_model_path='model_data//yolo_spine_model_testing.h5',
                       image_set='validation',  # assumes training/validation split is 0.9
-                      save_all=False)
+                      save_all=True)
 
     def get_partition(self):
         data_len = self.file_list.size

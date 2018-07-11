@@ -6,7 +6,7 @@ import scipy.ndimage as ndi
 from skimage import transform
 import PIL
 from spine_preprocessing.spine_preprocessing import process_data
-
+import cv2
 
 def random_rotation_with_boxes(x, boxes, rg, row_axis=0, col_axis=1, channel_axis=2,
                                fill_mode='constant', cval=0.):
@@ -109,7 +109,7 @@ def apply_transform(x,
 
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
-    def __init__(self, list_IDs, anchors, file_list, batch_size=32, dim=(32,32), n_channels=3,
+    def __init__(self, list_IDs, anchors, file_list, batch_size=32, dim=(416,416), n_channels=3,
                  n_classes=1, shuffle=True):
         'Initialization'
         self.anchors = anchors
